@@ -60,13 +60,29 @@ def row_values(ws, row, max_col):
 
 
 def is_title_row(ws, row, max_col):
-    """Heuristic: a title row is typically a single merged cell spanning most columns."""
+    """
+    Heuristic: a title row is a SINGLE merged cell that spans almost all columns (>= 80%)
+    AND is the only non-empty cell in that row.
+    This avoids misidentifying top-level multi-group headers (e.g. '经营快贷' spanning
+    half the columns) as title rows.
+    """
     for merged_range in ws.merged_cells.ranges:
-        if (merged_range.min_row == row and
-                merged_range.max_col - merged_range.min_col + 1 >= max_col * 0.6):
-            val = ws.cell(row=row, column=merged_range.min_col).value
-            if val and isinstance(val, str) and len(val.strip()) > 0:
-                return True
+        if merged_range.min_row != row:
+            continue
+        span = merged_range.max_col - merged_range.min_col + 1
+        if span < max_col * 0.8:
+            continue
+        val = ws.cell(row=row, column=merged_range.min_col).value
+        if not (val and isinstance(val, str) and val.strip()):
+            continue
+        # Ensure no other non-empty cells exist in this row outside the merge
+        other_vals = [
+            ws.cell(row=row, column=c).value
+            for c in range(1, max_col + 1)
+            if not (merged_range.min_col <= c <= merged_range.max_col)
+        ]
+        if all(v in (None, '') for v in other_vals):
+            return True
     return False
 
 
@@ -75,14 +91,21 @@ def is_empty_row(ws, row, max_col):
     return all(get_merged_value(ws, row, c) in (None, '') for c in range(1, max_col + 1))
 
 
-def looks_like_header_cell(val):
-    """Heuristic: header cells are usually short strings, not numbers."""
-    if val is None:
+def is_likely_data_value(val):
+    """
+    True if the value looks like actual data rather than a header label.
+    - Any float → data (covers percentages, decimals, large balances)
+    - Large int (> 2100 or < -1) → data
+    - Year-like int (1900-2100) or small ordinal (0-99) → could be header
+    - Strings → never data
+    """
+    if val is None or val == '':
         return False
-    if isinstance(val, (int, float)):
-        return False
-    s = str(val).strip()
-    return len(s) > 0 and len(s) < 40
+    if isinstance(val, float):
+        return True
+    if isinstance(val, int):
+        return not (0 <= val <= 2100)
+    return False  # strings are never data values
 
 
 def detect_structure(ws):
@@ -115,10 +138,9 @@ def detect_structure(ws):
             continue
         vals = row_values(ws, r, max_col)
         non_empty = [v for v in vals if v not in (None, '')]
-        # A header row has mostly string values and no obvious numeric data
-        has_numbers = any(isinstance(v, (int, float)) for v in non_empty)
-        all_strings = all(looks_like_header_cell(v) for v in non_empty)
-        if all_strings and not has_numbers and len(non_empty) > 0:
+        # A header row has no actual data values (floats / large ints)
+        has_data = any(is_likely_data_value(v) for v in non_empty)
+        if not has_data and len(non_empty) > 0:
             header_rows.append(r)
         else:
             data_start = r
@@ -129,39 +151,50 @@ def detect_structure(ws):
 
 def build_column_headers(ws, header_rows, max_col):
     """
-    Build a list of column header labels by flattening multi-level headers.
-    Returns list of strings, one per column (1..max_col).
+    Flatten multi-level column headers into single-row labels joined by '-'.
+
+    Strategy per level:
+    1. get_merged_value() already returns the top-left owner's value for every
+       cell that belongs to a merge range, so horizontal merged groups are
+       naturally filled in.
+    2. For cells that are physically empty but visually "under" a parent header
+       (not merged, just blank), we propagate the last non-empty value leftward
+       within each level row.
+    3. Per column, walk top→bottom and collect labels, skipping a label only
+       when it is identical to the label immediately above in the same column
+       (deduplication within the path, NOT across columns).
+
+    Example output: '经营快贷-商户e贷-余额'
     """
     if not header_rows:
         return [str(c) for c in range(1, max_col + 1)]
 
+    # Step 1: read effective values for each header row
     levels = []
     for r in header_rows:
-        row_labels = []
-        for c in range(1, max_col + 1):
-            row_labels.append(get_merged_value(ws, r, c))
+        row_labels = [get_merged_value(ws, r, c) for c in range(1, max_col + 1)]
         levels.append(row_labels)
 
-    # Propagate None horizontally (merged cells) in each level
+    # Step 2: propagate empty cells leftward within each level
+    # (handles cases where cells are blank rather than truly merged)
     for level in levels:
         last = None
         for i, v in enumerate(level):
-            if v is not None and v != '':
-                last = v
+            if v not in (None, ''):
+                last = str(v).strip()
             elif last is not None:
                 level[i] = last
 
-    # Combine levels into compound labels
+    # Step 3: build per-column label paths, deduplicate consecutive identical labels
     col_headers = []
     for c_idx in range(max_col):
         parts = []
-        prev = None
         for level in levels:
             v = level[c_idx]
-            if v and v != prev:
-                parts.append(str(v).strip())
-                prev = v
-        col_headers.append(' / '.join(parts) if parts else str(c_idx + 1))
+            s = str(v).strip() if v not in (None, '') else ''
+            if s and (not parts or parts[-1] != s):
+                parts.append(s)
+        col_headers.append('-'.join(parts) if parts else str(c_idx + 1))
 
     return col_headers
 
