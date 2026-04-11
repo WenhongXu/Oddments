@@ -171,6 +171,12 @@ router.put('/:id/status', (req, res) => {
 
 // GET project checkin calendar
 router.get('/:id/calendar', (req, res) => {
+  // Fix: verify the project belongs to the requesting user before exposing checkins
+  const project = db.prepare(
+    'SELECT id FROM projects WHERE id = ? AND user_id = ?'
+  ).get(req.params.id, req.userId);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
   const checkins = db.prepare(
     'SELECT date, completed, note FROM project_checkins WHERE project_id = ? ORDER BY date ASC'
   ).all(req.params.id);

@@ -5,11 +5,12 @@ const router = express.Router();
 
 // GET confidence evidence library
 router.get('/', (req, res) => {
-  const { limit = 50, offset = 0 } = req.query;
+  const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 200);
+  const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
   const logs = db.prepare(
     'SELECT id, date, content, source, created_at FROM confidence_logs WHERE user_id = ? ORDER BY date DESC LIMIT ? OFFSET ?'
-  ).all(req.userId, parseInt(limit), parseInt(offset));
+  ).all(req.userId, limit, offset);
 
   const total = db.prepare(
     'SELECT COUNT(*) as cnt FROM confidence_logs WHERE user_id = ?'

@@ -37,6 +37,11 @@ router.put('/:date', (req, res) => {
   const { date } = req.params;
   const { fixed_data, rotating_data } = req.body;
 
+  // Fix: validate date format to prevent garbage data
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: '日期格式无效，应为 YYYY-MM-DD' });
+  }
+
   if (!fixed_data) {
     return res.status(400).json({ error: 'fixed_data is required' });
   }
@@ -77,10 +82,10 @@ router.put('/:date', (req, res) => {
 
 // GET journal history
 router.get('/history', (req, res) => {
-  const { limit = 7 } = req.query;
+  const limit = Math.min(Math.max(parseInt(req.query.limit) || 7, 1), 90);
   const journals = db.prepare(
     'SELECT date, fixed_data, rotating_data FROM daily_journals WHERE user_id = ? ORDER BY date DESC LIMIT ?'
-  ).all(req.userId, parseInt(limit));
+  ).all(req.userId, limit);
 
   res.json(journals.map(j => ({
     date: j.date,

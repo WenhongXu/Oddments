@@ -63,9 +63,12 @@ router.post('/questions', (req, res) => {
 });
 
 // PUT toggle question active/inactive
+// Fix: only allow toggling questions owned by this user — not shared (system) questions
 router.put('/questions/:id/toggle', (req, res) => {
-  const q = db.prepare('SELECT is_active FROM question_pool WHERE id = ?').get(req.params.id);
-  if (!q) return res.status(404).json({ error: 'Question not found' });
+  const q = db.prepare(
+    'SELECT id, is_active FROM question_pool WHERE id = ? AND user_id = ?'
+  ).get(req.params.id, req.userId);
+  if (!q) return res.status(404).json({ error: '问题不存在或无权修改（系统问题不可更改）' });
 
   db.prepare('UPDATE question_pool SET is_active = ? WHERE id = ?').run(q.is_active ? 0 : 1, req.params.id);
   res.json({ success: true, is_active: !q.is_active });
