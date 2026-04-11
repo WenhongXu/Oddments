@@ -11,10 +11,12 @@ export default function AICoachPage() {
   const [reports, setReports] = useState([]);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [selectedReport, setSelectedReport] = useState(null);
+  const [aiStatus, setAiStatus] = useState(null);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
     loadHistory();
+    api.getAIStatus().then(setAiStatus).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -121,7 +123,16 @@ export default function AICoachPage() {
     <div className="page-container flex flex-col" style={{ height: '100vh', paddingBottom: '80px' }}>
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h1 className="font-serif text-gold text-xl glow-text">AI 教练</h1>
+        <div>
+          <h1 className="font-serif text-gold text-xl glow-text">AI 教练</h1>
+          {aiStatus && (
+            <p className="text-textMuted text-xs mt-0.5">
+              {aiStatus.configured
+                ? `${aiStatus.provider} · ${aiStatus.model}`
+                : '⚠️ AI 未配置'}
+            </p>
+          )}
+        </div>
         <div className="flex gap-2">
           <button
             className={`text-sm px-3 py-1.5 rounded-lg transition-all ${view === 'chat' ? 'bg-gold text-bg' : 'text-textMuted bg-surfaceHover border border-border'}`}

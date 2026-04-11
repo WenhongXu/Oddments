@@ -27,8 +27,23 @@ export default {
         statusZ: '#f59e0b',
       },
       fontFamily: {
-        serif: ['"Noto Serif SC"', '"Source Han Serif SC"', 'serif'],
-        sans: ['"Noto Sans SC"', 'system-ui', 'sans-serif'],
+        // System fonts first for instant render, web fonts as enhancement
+        serif: [
+          '"Noto Serif SC"',
+          '"Source Han Serif SC"',
+          '"STSong"',          // macOS/iOS 内置宋体
+          '"SimSun"',          // Windows 内置宋体
+          'serif',
+        ],
+        sans: [
+          '"Noto Sans SC"',
+          '"PingFang SC"',     // macOS/iOS 内置苹方
+          '"HarmonyOS Sans"',  // 华为/鸿蒙
+          '"MiSans"',          // 小米
+          '"Microsoft YaHei"', // Windows 微软雅黑
+          'system-ui',
+          'sans-serif',
+        ],
       },
       boxShadow: {
         glow: '0 0 20px rgba(232, 168, 73, 0.15)',

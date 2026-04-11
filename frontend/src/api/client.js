@@ -55,6 +55,7 @@ export const api = {
     request(`/pattern/dimension/${code}`, { method: 'PUT', body: { score } }),
 
   // AI
+  getAIStatus: () => request('/ai/status'),
   chat: (message) => request('/ai/chat', { method: 'POST', body: { message } }),
   generateWeeklyReport: () => request('/ai/weekly-report', { method: 'POST' }),
   getChatHistory: () => request('/ai/history'),

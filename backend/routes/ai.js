@@ -1,13 +1,9 @@
 import express from 'express';
-import Anthropic from '@anthropic-ai/sdk';
 import db from '../db/database.js';
 import { calculatePattern, DIMENSION_META } from '../utils/patternCalc.js';
+import { callAI, isAIConfigured, getAIInfo } from '../utils/aiClient.js';
 
 const router = express.Router();
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
 
 function buildSystemPrompt(userId) {
   const user = db.prepare('SELECT name, config_json FROM users WHERE id = ?').get(userId);
@@ -47,6 +43,11 @@ ${advisorNotes}
 - 关注用户说的具体情况，做出针对性回应`;
 }
 
+// GET AI status info (public within auth)
+router.get('/status', (req, res) => {
+  res.json({ configured: isAIConfigured(), ...getAIInfo() });
+});
+
 // POST chat with AI coach
 router.post('/chat', async (req, res) => {
   const userId = req.userId;
@@ -56,8 +57,8 @@ router.post('/chat', async (req, res) => {
     return res.status(400).json({ error: 'message is required' });
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return res.status(503).json({ error: 'AI服务未配置，请设置 ANTHROPIC_API_KEY' });
+  if (!isAIConfigured()) {
+    return res.status(503).json({ error: 'AI服务未配置，请在 .env 中设置 AI_PROVIDER 和 AI_API_KEY' });
   }
 
   const history = db.prepare(
@@ -71,26 +72,19 @@ router.post('/chat', async (req, res) => {
   try {
     const messages = [
       ...history.map(h => ({ role: h.role, content: h.content })),
-      { role: 'user', content: message }
+      { role: 'user', content: message },
     ];
 
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
-      system: buildSystemPrompt(userId),
-      messages,
-    });
-
-    const assistantMessage = response.content[0].text;
+    const assistantMessage = await callAI(buildSystemPrompt(userId), messages, 1024);
 
     db.prepare('INSERT INTO ai_conversations (user_id, role, content) VALUES (?, ?, ?)').run(
       userId, 'assistant', assistantMessage
     );
 
-    res.json({ message: assistantMessage, usage: response.usage });
+    res.json({ message: assistantMessage });
   } catch (err) {
-    console.error('AI chat error:', err);
-    res.status(500).json({ error: '与AI教练通信失败，请稍后再试' });
+    console.error('AI chat error:', err.message);
+    res.status(500).json({ error: `AI教练暂时无法回应：${err.message}` });
   }
 });
 
@@ -98,8 +92,8 @@ router.post('/chat', async (req, res) => {
 router.post('/weekly-report', async (req, res) => {
   const userId = req.userId;
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return res.status(503).json({ error: 'AI服务未配置，请设置 ANTHROPIC_API_KEY' });
+  if (!isAIConfigured()) {
+    return res.status(503).json({ error: 'AI服务未配置，请在 .env 中设置 AI_PROVIDER 和 AI_API_KEY' });
   }
 
   const today = new Date();
@@ -109,11 +103,14 @@ router.post('/weekly-report', async (req, res) => {
   const todayStr = today.toISOString().split('T')[0];
 
   const journals = db.prepare(
-    'SELECT date, fixed_data, rotating_data FROM daily_journals WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date'
+    'SELECT date, fixed_data FROM daily_journals WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date'
   ).all(userId, weekStartStr, todayStr);
 
   const projects = db.prepare(
-    "SELECT p.name, p.dimension, p.status, COUNT(pc.id) as checkin_count FROM projects p LEFT JOIN project_checkins pc ON p.id = pc.project_id AND pc.date >= ? AND pc.completed = 1 WHERE p.user_id = ? GROUP BY p.id"
+    `SELECT p.name, p.dimension, p.status, COUNT(pc.id) as checkin_count
+     FROM projects p
+     LEFT JOIN project_checkins pc ON p.id = pc.project_id AND pc.date >= ? AND pc.completed = 1
+     WHERE p.user_id = ? GROUP BY p.id`
   ).all(weekStartStr, userId);
 
   const dimensions = db.prepare(
@@ -122,20 +119,20 @@ router.post('/weekly-report', async (req, res) => {
 
   const pattern = calculatePattern(dimensions);
 
-  const journalSummary = journals.map(j => {
-    const fd = JSON.parse(j.fixed_data);
-    return `${j.date}: 身体${fd.morning_body || '?'}/5, 心情${fd.evening_mood || '?'}/5, 好事"${fd.good_thing || '-'}"`;
-  }).join('\n');
+  const journalSummary = journals.length
+    ? journals.map(j => {
+        const fd = JSON.parse(j.fixed_data);
+        return `${j.date}: 身体${fd.morning_body || '?'}/5, 心情${fd.evening_mood || '?'}/5, 好事"${fd.good_thing || '-'}"`;
+      }).join('\n')
+    : '本周暂无日记记录';
 
-  const projectSummary = projects.map(p => {
-    const meta = DIMENSION_META[p.dimension];
-    return `[${meta?.label || p.dimension}] ${p.name}: 打卡${p.checkin_count}次`;
-  }).join('\n');
+  const projectSummary = projects.length
+    ? projects.map(p => `[${DIMENSION_META[p.dimension]?.label || p.dimension}] ${p.name}: 打卡${p.checkin_count}次`).join('\n')
+    : '本周暂无活跃项目';
 
   const dimSummary = dimensions.map(d => {
-    const meta = DIMENSION_META[d.dimension_code];
     const label = { C: '蓄势', L: '流动', Z: '绽放' }[d.status];
-    return `${meta.label}: ${d.score.toFixed(1)}/5 [${label}]`;
+    return `${DIMENSION_META[d.dimension_code]?.label}: ${d.score.toFixed(1)}/5 [${label}]`;
   }).join(', ');
 
   const prompt = `请为以下一周的生活数据生成一份温暖、有洞见的周报。
@@ -143,10 +140,10 @@ router.post('/weekly-report', async (req, res) => {
 本周数据（${weekStartStr} 至 ${todayStr}）：
 
 【日记记录】
-${journalSummary || '本周暂无日记记录'}
+${journalSummary}
 
 【项目进度】
-${projectSummary || '本周暂无活跃项目'}
+${projectSummary}
 
 【当前维度状态】
 ${dimSummary}
@@ -162,14 +159,7 @@ ${dimSummary}
 语气温暖而直接，避免空洞鼓励，字数控制在400字以内。`;
 
   try {
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1500,
-      system: buildSystemPrompt(userId),
-      messages: [{ role: 'user', content: prompt }],
-    });
-
-    const reportContent = response.content[0].text;
+    const reportContent = await callAI(buildSystemPrompt(userId), [{ role: 'user', content: prompt }], 1500);
 
     db.prepare(
       'INSERT INTO weekly_reports (user_id, week_start, report_content) VALUES (?, ?, ?)'
@@ -177,8 +167,8 @@ ${dimSummary}
 
     res.json({ report: reportContent, weekStart: weekStartStr, weekEnd: todayStr });
   } catch (err) {
-    console.error('Weekly report error:', err);
-    res.status(500).json({ error: '生成周报失败，请稍后再试' });
+    console.error('Weekly report error:', err.message);
+    res.status(500).json({ error: `生成周报失败：${err.message}` });
   }
 });
 
@@ -188,7 +178,6 @@ router.get('/history', (req, res) => {
   const history = db.prepare(
     'SELECT role, content, created_at FROM ai_conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT ?'
   ).all(req.userId, parseInt(limit));
-
   res.json(history.reverse());
 });
 
