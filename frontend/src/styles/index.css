@@ -1,0 +1,153 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+    box-sizing: border-box;
+  }
+
+  html, body {
+    background-color: #0f1117;
+    color: #e8e8f0;
+    font-family: 'Noto Sans SC', system-ui, sans-serif;
+    overscroll-behavior: none;
+  }
+
+  h1, h2, h3 {
+    font-family: 'Noto Serif SC', serif;
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #2a2d3e;
+    border-radius: 2px;
+  }
+
+  input, textarea {
+    color: #e8e8f0;
+    background-color: transparent;
+  }
+
+  input::placeholder, textarea::placeholder {
+    color: #8888aa;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+  }
+
+  input[type="range"]::-webkit-slider-runnable-track {
+    background: #2a2d3e;
+    height: 4px;
+    border-radius: 2px;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #e8a849;
+    margin-top: -8px;
+    cursor: pointer;
+    box-shadow: 0 0 8px rgba(232, 168, 73, 0.4);
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface rounded-lg shadow-card p-4;
+  }
+
+  .btn-primary {
+    @apply bg-gold text-bg font-medium py-3 px-6 rounded-lg active:opacity-80 transition-opacity;
+  }
+
+  .btn-secondary {
+    @apply bg-surfaceHover text-text font-medium py-3 px-6 rounded-lg border border-border active:opacity-80 transition-opacity;
+  }
+
+  .btn-ghost {
+    @apply text-gold font-medium py-2 px-4 rounded-lg active:opacity-70 transition-opacity;
+  }
+
+  .input-field {
+    @apply w-full bg-surfaceHover border border-border rounded-lg px-4 py-3 text-text placeholder:text-textMuted focus:outline-none focus:border-gold transition-colors;
+  }
+
+  .section-title {
+    @apply font-serif text-gold text-lg font-medium;
+  }
+
+  .page-container {
+    @apply max-w-[520px] mx-auto min-h-screen pb-24 px-4 pt-6;
+  }
+
+  .nav-item {
+    @apply flex flex-col items-center gap-0.5 py-2 px-3 flex-1 transition-all;
+  }
+
+  .glow-text {
+    text-shadow: 0 0 20px rgba(232, 168, 73, 0.5);
+  }
+
+  .status-badge {
+    @apply text-xs px-2 py-0.5 rounded-full font-medium;
+  }
+
+  .status-C {
+    @apply bg-gray-700 text-gray-300;
+  }
+
+  .status-L {
+    @apply bg-blue-900/50 text-blue-300;
+  }
+
+  .status-Z {
+    @apply bg-amber-900/50 text-amber-300;
+  }
+}
+
+/* Shimmer animation for loading */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, #1a1d27 25%, #22263a 50%, #1a1d27 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Fade in animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Pulse glow for active state */
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 8px rgba(232, 168, 73, 0.2); }
+  50% { box-shadow: 0 0 20px rgba(232, 168, 73, 0.5); }
+}
+
+.pulse-glow {
+  animation: pulseGlow 2s ease-in-out infinite;
+}
