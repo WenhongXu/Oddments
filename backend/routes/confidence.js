@@ -2,7 +2,6 @@ import express from 'express';
 import db from '../db/database.js';
 
 const router = express.Router();
-const USER_ID = 1;
 
 // GET confidence evidence library
 router.get('/', (req, res) => {
@@ -10,11 +9,11 @@ router.get('/', (req, res) => {
 
   const logs = db.prepare(
     'SELECT id, date, content, source, created_at FROM confidence_logs WHERE user_id = ? ORDER BY date DESC LIMIT ? OFFSET ?'
-  ).all(USER_ID, parseInt(limit), parseInt(offset));
+  ).all(req.userId, parseInt(limit), parseInt(offset));
 
   const total = db.prepare(
     'SELECT COUNT(*) as cnt FROM confidence_logs WHERE user_id = ?'
-  ).get(USER_ID);
+  ).get(req.userId);
 
   res.json({ logs, total: total.cnt });
 });
@@ -31,7 +30,7 @@ router.post('/', (req, res) => {
 
   const result = db.prepare(
     'INSERT INTO confidence_logs (user_id, date, content, source) VALUES (?, ?, ?, ?)'
-  ).run(USER_ID, entryDate, content.trim(), 'manual');
+  ).run(req.userId, entryDate, content.trim(), 'manual');
 
   res.status(201).json({
     id: result.lastInsertRowid,
@@ -43,15 +42,15 @@ router.post('/', (req, res) => {
 
 // DELETE a confidence entry
 router.delete('/:id', (req, res) => {
-  db.prepare('DELETE FROM confidence_logs WHERE id = ? AND user_id = ?').run(req.params.id, USER_ID);
+  db.prepare('DELETE FROM confidence_logs WHERE id = ? AND user_id = ?').run(req.params.id, req.userId);
   res.json({ success: true });
 });
 
-// GET random confidence entry (for daily motivation)
+// GET random confidence entry
 router.get('/random', (req, res) => {
   const log = db.prepare(
     'SELECT id, date, content, source FROM confidence_logs WHERE user_id = ? ORDER BY RANDOM() LIMIT 1'
-  ).get(USER_ID);
+  ).get(req.userId);
 
   if (!log) {
     return res.json({ log: null, message: '你的自信证据库还是空的，完成日记后会自动记录你的正向回答。' });

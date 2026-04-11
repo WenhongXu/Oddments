@@ -2,25 +2,22 @@ import express from 'express';
 import db from '../db/database.js';
 
 const router = express.Router();
-const USER_ID = 1;
 const DIMS = ['BODY', 'DIET', 'MIND', 'CAREER', 'RELATION', 'FAMILY', 'FINANCE', 'INNER'];
 
 // GET today's journal template (fixed + rotating questions)
 router.get('/today', (req, res) => {
+  const userId = req.userId;
   const today = new Date().toISOString().split('T')[0];
 
-  // Check if already filled
   const existing = db.prepare(
     'SELECT * FROM daily_journals WHERE user_id = ? AND date = ?'
-  ).get(USER_ID, today);
+  ).get(userId, today);
 
-  // Get active projects for check-in
   const projects = db.prepare(
     "SELECT id, name, dimension FROM projects WHERE user_id = ? AND status = 'active'"
-  ).all(USER_ID);
+  ).all(userId);
 
-  // Select rotating questions: 2-3 per session, prioritize under-asked dimensions
-  const rotatingQuestions = selectRotatingQuestions(today);
+  const rotatingQuestions = selectRotatingQuestions(today, userId);
 
   res.json({
     date: today,
@@ -36,6 +33,7 @@ router.get('/today', (req, res) => {
 
 // PUT save journal for a date
 router.put('/:date', (req, res) => {
+  const userId = req.userId;
   const { date } = req.params;
   const { fixed_data, rotating_data } = req.body;
 
@@ -43,16 +41,14 @@ router.put('/:date', (req, res) => {
     return res.status(400).json({ error: 'fixed_data is required' });
   }
 
-  // Save or update journal
   db.prepare(`
     INSERT INTO daily_journals (user_id, date, fixed_data, rotating_data)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(user_id, date) DO UPDATE SET
       fixed_data = excluded.fixed_data,
       rotating_data = excluded.rotating_data
-  `).run(USER_ID, date, JSON.stringify(fixed_data), JSON.stringify(rotating_data || {}));
+  `).run(userId, date, JSON.stringify(fixed_data), JSON.stringify(rotating_data || {}));
 
-  // Extract confidence entries from rotating answers
   if (rotating_data) {
     for (const [qid, answer] of Object.entries(rotating_data)) {
       const q = db.prepare('SELECT * FROM question_pool WHERE id = ?').get(parseInt(qid));
@@ -61,16 +57,14 @@ router.put('/:date', (req, res) => {
         if (cfg.is_confidence && answer && typeof answer === 'string' && answer.trim()) {
           db.prepare(
             'INSERT INTO confidence_logs (user_id, date, content, source) VALUES (?, ?, ?, ?)'
-          ).run(USER_ID, date, answer.trim(), 'daily');
+          ).run(userId, date, answer.trim(), 'daily');
         }
       }
     }
   }
 
-  // Update dimension scores from fixed_data
-  updateDimensionScores(fixed_data, rotating_data);
+  updateDimensionScores(fixed_data, rotating_data, userId);
 
-  // Mark rotating questions as asked
   if (rotating_data) {
     const stmt = db.prepare("UPDATE question_pool SET last_asked_at = ? WHERE id = ?");
     for (const qid of Object.keys(rotating_data)) {
@@ -86,7 +80,7 @@ router.get('/history', (req, res) => {
   const { limit = 7 } = req.query;
   const journals = db.prepare(
     'SELECT date, fixed_data, rotating_data FROM daily_journals WHERE user_id = ? ORDER BY date DESC LIMIT ?'
-  ).all(USER_ID, parseInt(limit));
+  ).all(req.userId, parseInt(limit));
 
   res.json(journals.map(j => ({
     date: j.date,
@@ -99,7 +93,7 @@ router.get('/history', (req, res) => {
 router.get('/week-mood', (req, res) => {
   const journals = db.prepare(
     'SELECT date, fixed_data FROM daily_journals WHERE user_id = ? ORDER BY date DESC LIMIT 14'
-  ).all(USER_ID);
+  ).all(req.userId);
 
   const data = journals.map(j => {
     const fd = JSON.parse(j.fixed_data);
@@ -114,31 +108,26 @@ router.get('/week-mood', (req, res) => {
   res.json(data);
 });
 
-function selectRotatingQuestions(today) {
-  // Get all dimensions' recent scores to prioritize lower-scoring ones
-  const dims = db.prepare('SELECT dimension_code, score FROM dimensions WHERE user_id = ?').all(USER_ID);
+function selectRotatingQuestions(today, userId) {
+  const dims = db.prepare('SELECT dimension_code, score FROM dimensions WHERE user_id = ?').all(userId);
   const dimScores = {};
   for (const d of dims) dimScores[d.dimension_code] = d.score;
 
-  // Sort dimensions by score (ascending) to prioritize weaker ones
   const sortedDims = [...DIMS].sort((a, b) => (dimScores[a] || 3) - (dimScores[b] || 3));
 
   const selected = [];
   const usedDims = new Set();
 
-  // Pick 2-3 questions, preferring lower-scoring dimensions
-  // but ensuring variety
   for (const dim of sortedDims) {
     if (selected.length >= 3) break;
     if (usedDims.has(dim)) continue;
 
-    // Get least recently asked question for this dimension
     const q = db.prepare(`
       SELECT * FROM question_pool
       WHERE dimension = ? AND is_active = 1 AND (user_id IS NULL OR user_id = ?)
       ORDER BY last_asked_at ASC NULLS FIRST, RANDOM()
       LIMIT 1
-    `).get(dim, USER_ID);
+    `).get(dim, userId);
 
     if (q) {
       selected.push({
@@ -152,7 +141,6 @@ function selectRotatingQuestions(today) {
     }
   }
 
-  // Fill up to 3 if needed with random questions
   if (selected.length < 2) {
     const extra = db.prepare(`
       SELECT * FROM question_pool
@@ -160,7 +148,7 @@ function selectRotatingQuestions(today) {
       AND id NOT IN (${selected.map(() => '?').join(',') || '0'})
       ORDER BY RANDOM()
       LIMIT ?
-    `).all(USER_ID, ...selected.map(q => q.id), 3 - selected.length);
+    `).all(userId, ...selected.map(q => q.id), 3 - selected.length);
 
     for (const q of extra) {
       selected.push({
@@ -176,13 +164,11 @@ function selectRotatingQuestions(today) {
   return selected;
 }
 
-function updateDimensionScores(fixed_data, rotating_data) {
-  // Aggregate dimension signals from rotating answers
+function updateDimensionScores(fixed_data, rotating_data, userId) {
   const dimScores = {};
   const dimCounts = {};
 
   if (rotating_data) {
-    // Get the questions to understand which dimension each answer belongs to
     for (const [qid, answer] of Object.entries(rotating_data)) {
       const q = db.prepare('SELECT dimension, question_type FROM question_pool WHERE id = ?').get(parseInt(qid));
       if (!q) continue;
@@ -202,7 +188,6 @@ function updateDimensionScores(fixed_data, rotating_data) {
     }
   }
 
-  // Also use fixed morning/evening data
   if (fixed_data.morning_body) {
     const v = fixed_data.morning_body;
     if (!dimScores['BODY']) { dimScores['BODY'] = 0; dimCounts['BODY'] = 0; }
@@ -217,7 +202,6 @@ function updateDimensionScores(fixed_data, rotating_data) {
     dimCounts['MIND']++;
   }
 
-  // Update dimension scores (exponential moving average: 70% old + 30% new)
   const update = db.prepare(
     'UPDATE dimensions SET score = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND dimension_code = ?'
   );
@@ -225,10 +209,10 @@ function updateDimensionScores(fixed_data, rotating_data) {
   for (const [dim, total] of Object.entries(dimScores)) {
     if (dimCounts[dim] === 0) continue;
     const newScore = total / dimCounts[dim];
-    const existing = db.prepare('SELECT score FROM dimensions WHERE user_id = ? AND dimension_code = ?').get(USER_ID, dim);
+    const existing = db.prepare('SELECT score FROM dimensions WHERE user_id = ? AND dimension_code = ?').get(userId, dim);
     const blendedScore = existing ? (existing.score * 0.7 + newScore * 0.3) : newScore;
     const status = blendedScore >= 3.8 ? 'Z' : blendedScore >= 2.5 ? 'L' : 'C';
-    update.run(blendedScore, status, USER_ID, dim);
+    update.run(blendedScore, status, userId, dim);
   }
 }
 

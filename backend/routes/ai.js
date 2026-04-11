@@ -4,20 +4,19 @@ import db from '../db/database.js';
 import { calculatePattern, DIMENSION_META } from '../utils/patternCalc.js';
 
 const router = express.Router();
-const USER_ID = 1;
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-function buildSystemPrompt() {
-  const user = db.prepare('SELECT name, config_json FROM users WHERE id = ?').get(USER_ID);
+function buildSystemPrompt(userId) {
+  const user = db.prepare('SELECT name, config_json FROM users WHERE id = ?').get(userId);
   const config = JSON.parse(user?.config_json || '{}');
   const userName = user?.name || '守明';
 
   const dimensions = db.prepare(
     'SELECT dimension_code, score, status FROM dimensions WHERE user_id = ?'
-  ).all(USER_ID);
+  ).all(userId);
 
   const pattern = calculatePattern(dimensions);
   const dimSummary = dimensions.map(d => {
@@ -50,6 +49,7 @@ ${advisorNotes}
 
 // POST chat with AI coach
 router.post('/chat', async (req, res) => {
+  const userId = req.userId;
   const { message } = req.body;
 
   if (!message?.trim()) {
@@ -60,14 +60,12 @@ router.post('/chat', async (req, res) => {
     return res.status(503).json({ error: 'AI服务未配置，请设置 ANTHROPIC_API_KEY' });
   }
 
-  // Get recent conversation history (last 10 messages)
   const history = db.prepare(
     "SELECT role, content FROM ai_conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT 10"
-  ).all(USER_ID).reverse();
+  ).all(userId).reverse();
 
-  // Save user message
   db.prepare('INSERT INTO ai_conversations (user_id, role, content) VALUES (?, ?, ?)').run(
-    USER_ID, 'user', message
+    userId, 'user', message
   );
 
   try {
@@ -79,15 +77,14 @@ router.post('/chat', async (req, res) => {
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 1024,
-      system: buildSystemPrompt(),
+      system: buildSystemPrompt(userId),
       messages,
     });
 
     const assistantMessage = response.content[0].text;
 
-    // Save assistant response
     db.prepare('INSERT INTO ai_conversations (user_id, role, content) VALUES (?, ?, ?)').run(
-      USER_ID, 'assistant', assistantMessage
+      userId, 'assistant', assistantMessage
     );
 
     res.json({ message: assistantMessage, usage: response.usage });
@@ -99,6 +96,8 @@ router.post('/chat', async (req, res) => {
 
 // POST generate weekly report
 router.post('/weekly-report', async (req, res) => {
+  const userId = req.userId;
+
   if (!process.env.ANTHROPIC_API_KEY) {
     return res.status(503).json({ error: 'AI服务未配置，请设置 ANTHROPIC_API_KEY' });
   }
@@ -109,25 +108,22 @@ router.post('/weekly-report', async (req, res) => {
   const weekStartStr = weekStart.toISOString().split('T')[0];
   const todayStr = today.toISOString().split('T')[0];
 
-  // Gather week's data
   const journals = db.prepare(
     'SELECT date, fixed_data, rotating_data FROM daily_journals WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date'
-  ).all(USER_ID, weekStartStr, todayStr);
+  ).all(userId, weekStartStr, todayStr);
 
   const projects = db.prepare(
     "SELECT p.name, p.dimension, p.status, COUNT(pc.id) as checkin_count FROM projects p LEFT JOIN project_checkins pc ON p.id = pc.project_id AND pc.date >= ? AND pc.completed = 1 WHERE p.user_id = ? GROUP BY p.id"
-  ).all(weekStartStr, USER_ID);
+  ).all(weekStartStr, userId);
 
   const dimensions = db.prepare(
     'SELECT dimension_code, score, status FROM dimensions WHERE user_id = ?'
-  ).all(USER_ID);
+  ).all(userId);
 
   const pattern = calculatePattern(dimensions);
 
-  // Build summary for AI
   const journalSummary = journals.map(j => {
     const fd = JSON.parse(j.fixed_data);
-    const rd = JSON.parse(j.rotating_data);
     return `${j.date}: 身体${fd.morning_body || '?'}/5, 心情${fd.evening_mood || '?'}/5, 好事"${fd.good_thing || '-'}"`;
   }).join('\n');
 
@@ -169,16 +165,15 @@ ${dimSummary}
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 1500,
-      system: buildSystemPrompt(),
+      system: buildSystemPrompt(userId),
       messages: [{ role: 'user', content: prompt }],
     });
 
     const reportContent = response.content[0].text;
 
-    // Save report
     db.prepare(
       'INSERT INTO weekly_reports (user_id, week_start, report_content) VALUES (?, ?, ?)'
-    ).run(USER_ID, weekStartStr, reportContent);
+    ).run(userId, weekStartStr, reportContent);
 
     res.json({ report: reportContent, weekStart: weekStartStr, weekEnd: todayStr });
   } catch (err) {
@@ -192,14 +187,14 @@ router.get('/history', (req, res) => {
   const { limit = 20 } = req.query;
   const history = db.prepare(
     'SELECT role, content, created_at FROM ai_conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT ?'
-  ).all(USER_ID, parseInt(limit));
+  ).all(req.userId, parseInt(limit));
 
   res.json(history.reverse());
 });
 
 // DELETE clear conversation history
 router.delete('/history', (req, res) => {
-  db.prepare('DELETE FROM ai_conversations WHERE user_id = ?').run(USER_ID);
+  db.prepare('DELETE FROM ai_conversations WHERE user_id = ?').run(req.userId);
   res.json({ success: true });
 });
 
@@ -207,7 +202,7 @@ router.delete('/history', (req, res) => {
 router.get('/weekly-reports', (req, res) => {
   const reports = db.prepare(
     'SELECT id, week_start, report_content, created_at FROM weekly_reports WHERE user_id = ? ORDER BY created_at DESC LIMIT 5'
-  ).all(USER_ID);
+  ).all(req.userId);
   res.json(reports);
 });
 

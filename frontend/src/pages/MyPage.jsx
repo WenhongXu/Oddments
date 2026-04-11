@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
+import { changePin, getToken, createUser } from '../api/auth';
 import LoadingSpinner from '../components/LoadingSpinner';
 
-export default function MyPage() {
+export default function MyPage({ user, onLogout }) {
   const [stats, setStats] = useState(null);
   const [confidence, setConfidence] = useState([]);
   const [randomEntry, setRandomEntry] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState('home'); // home | confidence | admin
+  const [view, setView] = useState('home'); // home | confidence | admin | pin | adduser
   const [adminConfig, setAdminConfig] = useState(null);
 
   useEffect(() => {
@@ -53,9 +54,25 @@ export default function MyPage() {
     );
   }
 
+  if (view === 'pin') {
+    return <ChangePinPanel onBack={() => setView('home')} onSuccess={onLogout} />;
+  }
+
+  if (view === 'adduser') {
+    return <AddUserPanel onBack={() => setView('home')} />;
+  }
+
   return (
     <div className="page-container">
-      <h1 className="font-serif text-gold text-xl glow-text mb-6">我的</h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="font-serif text-gold text-xl glow-text">我的</h1>
+        {user && (
+          <div className="text-right">
+            <p className="text-text text-sm font-medium">{user.name}</p>
+            <p className="text-textMuted text-xs">@{user.username}</p>
+          </div>
+        )}
+      </div>
 
       {/* Stats overview */}
       <div className="grid grid-cols-2 gap-3 mb-6">
@@ -104,34 +121,19 @@ export default function MyPage() {
 
       {/* Quick links */}
       <div className="space-y-2 mb-4">
-        <button
-          className="card w-full flex items-center gap-3 text-left active:bg-surfaceHover"
-          onClick={() => setView('confidence')}
-        >
-          <span className="text-xl">⭐</span>
-          <div className="flex-1">
-            <p className="text-sm font-medium text-text">自信证据库</p>
-            <p className="text-xs text-textMuted">你做对的事情，都记录在这里</p>
-          </div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 text-textMuted">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-          </svg>
-        </button>
-
-        <button
-          className="card w-full flex items-center gap-3 text-left active:bg-surfaceHover"
-          onClick={() => setView('admin')}
-        >
-          <span className="text-xl">⚙️</span>
-          <div className="flex-1">
-            <p className="text-sm font-medium text-text">顾问配置</p>
-            <p className="text-xs text-textMuted">命理师指导原则与个性化设置</p>
-          </div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 text-textMuted">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-          </svg>
-        </button>
+        <MenuLink icon="⭐" title="自信证据库" sub="你做对的事情，都记录在这里" onClick={() => setView('confidence')} />
+        <MenuLink icon="⚙️" title="顾问配置" sub="命理师指导原则与个性化设置" onClick={() => setView('admin')} />
+        <MenuLink icon="🔑" title="修改PIN码" sub="更改你的登录密码" onClick={() => setView('pin')} />
+        <MenuLink icon="👤" title="添加用户" sub="为家人朋友创建账户" onClick={() => setView('adduser')} />
       </div>
+
+      {/* Logout */}
+      <button
+        className="w-full py-3 rounded-lg border border-red-900/40 text-red-400 text-sm active:opacity-70 mb-4"
+        onClick={onLogout}
+      >
+        退出登录
+      </button>
 
       {/* App info */}
       <div className="card text-center text-textMuted">
@@ -139,6 +141,24 @@ export default function MyPage() {
         <p className="text-xs mt-0.5">V2.0 · 2026</p>
       </div>
     </div>
+  );
+}
+
+function MenuLink({ icon, title, sub, onClick }) {
+  return (
+    <button
+      className="card w-full flex items-center gap-3 text-left active:bg-surfaceHover"
+      onClick={onClick}
+    >
+      <span className="text-xl">{icon}</span>
+      <div className="flex-1">
+        <p className="text-sm font-medium text-text">{title}</p>
+        <p className="text-xs text-textMuted">{sub}</p>
+      </div>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 text-textMuted flex-shrink-0">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+      </svg>
+    </button>
   );
 }
 
@@ -388,6 +408,121 @@ function AdminPanel({ config, onBack, onSave }) {
           disabled={saving}
         >
           {saved ? '✓ 已保存' : saving ? '保存中...' : '保存配置'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ChangePinPanel({ onBack, onSuccess }) {
+  const [currentPin, setCurrentPin] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  async function save() {
+    if (newPin.length < 4) { setError('新PIN码至少4位'); return; }
+    if (newPin !== confirmPin) { setError('两次输入的PIN码不一致'); return; }
+    setError('');
+    setSaving(true);
+    try {
+      await changePin(currentPin, newPin, getToken());
+      alert('PIN码已更新，请重新登录');
+      onSuccess();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="page-container">
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={onBack} className="text-textMuted active:text-gold">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+          </svg>
+        </button>
+        <h1 className="font-serif text-gold text-xl">修改PIN码</h1>
+      </div>
+      <div className="space-y-4">
+        <div>
+          <label className="text-sm text-textMuted block mb-1.5">当前PIN码</label>
+          <input type="password" inputMode="numeric" maxLength={6} className="input-field text-center tracking-widest text-xl" placeholder="••••" value={currentPin} onChange={e => setCurrentPin(e.target.value.replace(/\D/g, ''))} />
+        </div>
+        <div>
+          <label className="text-sm text-textMuted block mb-1.5">新PIN码（至少4位）</label>
+          <input type="password" inputMode="numeric" maxLength={6} className="input-field text-center tracking-widest text-xl" placeholder="••••" value={newPin} onChange={e => setNewPin(e.target.value.replace(/\D/g, ''))} />
+        </div>
+        <div>
+          <label className="text-sm text-textMuted block mb-1.5">确认新PIN码</label>
+          <input type="password" inputMode="numeric" maxLength={6} className="input-field text-center tracking-widest text-xl" placeholder="••••" value={confirmPin} onChange={e => setConfirmPin(e.target.value.replace(/\D/g, ''))} />
+        </div>
+        {error && <p className="text-red-400 text-sm bg-red-900/20 rounded-lg py-2 px-3 text-center">{error}</p>}
+        <button className="btn-primary w-full" onClick={save} disabled={saving}>
+          {saving ? '保存中...' : '确认修改'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AddUserPanel({ onBack }) {
+  const [name, setName] = useState('');
+  const [username, setUsername] = useState('');
+  const [pin, setPin] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  async function submit() {
+    if (!name || !username || pin.length < 4) { setError('请填写完整信息'); return; }
+    setError(''); setSaving(true);
+    try {
+      await createUser(name.trim(), username.trim(), pin, getToken());
+      setSuccess(`用户 @${username} 已创建，PIN码：${pin}`);
+      setName(''); setUsername(''); setPin('');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="page-container">
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={onBack} className="text-textMuted active:text-gold">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+          </svg>
+        </button>
+        <h1 className="font-serif text-gold text-xl">添加用户</h1>
+      </div>
+      <div className="space-y-4">
+        <div>
+          <label className="text-sm text-textMuted block mb-1.5">用户名字</label>
+          <input className="input-field" placeholder="例：小明" value={name} onChange={e => setName(e.target.value)} />
+        </div>
+        <div>
+          <label className="text-sm text-textMuted block mb-1.5">登录用户名</label>
+          <input className="input-field" placeholder="英文或拼音" value={username} onChange={e => setUsername(e.target.value.toLowerCase().replace(/\s/g, ''))} />
+        </div>
+        <div>
+          <label className="text-sm text-textMuted block mb-1.5">初始PIN码（4-6位）</label>
+          <input type="password" inputMode="numeric" maxLength={6} className="input-field text-center tracking-widest text-xl" placeholder="••••" value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, ''))} />
+        </div>
+        {error && <p className="text-red-400 text-sm bg-red-900/20 rounded-lg py-2 px-3 text-center">{error}</p>}
+        {success && (
+          <div className="bg-green-900/20 border border-green-700/40 rounded-lg p-3">
+            <p className="text-green-400 text-sm text-center">{success}</p>
+            <p className="text-textMuted text-xs text-center mt-1">请将登录信息告知用户，建议首次登录后修改PIN码</p>
+          </div>
+        )}
+        <button className="btn-primary w-full" onClick={submit} disabled={saving}>
+          {saving ? '创建中...' : '创建用户'}
         </button>
       </div>
     </div>

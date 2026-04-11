@@ -2,13 +2,13 @@ import express from 'express';
 import db from '../db/database.js';
 
 const router = express.Router();
-const USER_ID = 1;
 
 // GET all projects
 router.get('/', (req, res) => {
+  const userId = req.userId;
   const { status } = req.query;
   let query = 'SELECT * FROM projects WHERE user_id = ?';
-  const params = [USER_ID];
+  const params = [userId];
 
   if (status) {
     query += ' AND status = ?';
@@ -18,7 +18,6 @@ router.get('/', (req, res) => {
 
   const projects = db.prepare(query).all(...params);
 
-  // Enrich with checkin stats
   const enriched = projects.map(p => {
     const checkins = db.prepare(
       'SELECT date, completed, note FROM project_checkins WHERE project_id = ? ORDER BY date DESC'
@@ -29,7 +28,6 @@ router.get('/', (req, res) => {
     const todayStr = new Date().toISOString().split('T')[0];
     const checkedInToday = checkins.some(c => c.date === todayStr && c.completed);
 
-    // Calculate streak
     let streak = 0;
     const sortedDates = checkins
       .filter(c => c.completed)
@@ -67,7 +65,7 @@ router.get('/', (req, res) => {
 
 // GET single project
 router.get('/:id', (req, res) => {
-  const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(req.params.id, USER_ID);
+  const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(req.params.id, req.userId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
   const checkins = db.prepare(
@@ -84,16 +82,16 @@ router.get('/:id', (req, res) => {
 
 // POST create project
 router.post('/', (req, res) => {
+  const userId = req.userId;
   const { dimension, name, goal, start_date, end_date, rules, milestones, completion_criteria } = req.body;
 
   if (!name || !dimension) {
     return res.status(400).json({ error: 'name and dimension are required' });
   }
 
-  // Check active project limit
   const activeCount = db.prepare(
     "SELECT COUNT(*) as cnt FROM projects WHERE user_id = ? AND status = 'active'"
-  ).get(USER_ID);
+  ).get(userId);
 
   if (activeCount.cnt >= 5) {
     return res.status(400).json({
@@ -106,7 +104,7 @@ router.post('/', (req, res) => {
     INSERT INTO projects (user_id, dimension, name, goal, start_date, end_date, rules, milestones, completion_criteria)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    USER_ID, dimension, name, goal || null,
+    userId, dimension, name, goal || null,
     start_date || new Date().toISOString().split('T')[0],
     end_date || null,
     JSON.stringify(rules || {}),
@@ -128,24 +126,21 @@ router.post('/:id/checkin', (req, res) => {
   const { note, date } = req.body;
   const checkinDate = date || new Date().toISOString().split('T')[0];
 
-  const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(id, USER_ID);
+  const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(id, req.userId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   if (project.status !== 'active') return res.status(400).json({ error: '项目不在进行中状态' });
 
-  // Upsert check-in
   db.prepare(`
     INSERT INTO project_checkins (project_id, date, completed, note)
     VALUES (?, ?, 1, ?)
     ON CONFLICT(project_id, date) DO UPDATE SET completed = 1, note = excluded.note
   `).run(id, checkinDate, note || null);
 
-  // Auto-check completion
   checkProjectCompletion(id, project);
 
   res.json({ success: true, date: checkinDate });
 });
 
-// Add unique constraint for checkins
 db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_checkin_project_date ON project_checkins(project_id, date);
 `);
@@ -159,7 +154,7 @@ router.put('/:id/status', (req, res) => {
     return res.status(400).json({ error: 'Invalid status' });
   }
 
-  const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(req.params.id, USER_ID);
+  const project = db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(req.params.id, req.userId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
   const rules = JSON.parse(project.rules || '{}');
@@ -174,7 +169,7 @@ router.put('/:id/status', (req, res) => {
   res.json({ success: true, status });
 });
 
-// GET project checkin calendar (for visualizing)
+// GET project checkin calendar
 router.get('/:id/calendar', (req, res) => {
   const checkins = db.prepare(
     'SELECT date, completed, note FROM project_checkins WHERE project_id = ? ORDER BY date ASC'
@@ -190,13 +185,11 @@ function checkProjectCompletion(projectId, project) {
     'SELECT COUNT(*) as cnt FROM project_checkins WHERE project_id = ? AND completed = 1'
   ).get(projectId);
 
-  // Simple check: if criteria mentions a number (e.g. "25天"), check if reached
   const match = project.completion_criteria.match(/(\d+)/);
   if (match && checkins.cnt >= parseInt(match[1])) {
     db.prepare("UPDATE projects SET status = 'completed' WHERE id = ?").run(projectId);
   }
 
-  // Also check if past end_date
   if (project.end_date) {
     const today = new Date().toISOString().split('T')[0];
     if (today > project.end_date && project.status === 'active') {

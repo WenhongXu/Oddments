@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import authRouter, { authMiddleware } from './routes/auth.js';
 import journalRoutes from './routes/journal.js';
 import projectRoutes from './routes/projects.js';
 import patternRoutes from './routes/patterns.js';
@@ -21,18 +22,21 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Routes
-app.use('/api/journal', journalRoutes);
-app.use('/api/projects', projectRoutes);
-app.use('/api/pattern', patternRoutes);
-app.use('/api/ai', aiRoutes);
-app.use('/api/confidence', confidenceRoutes);
-app.use('/api/admin', adminRoutes);
+// Public routes
+app.use('/api/auth', authRouter);
 
-// Health check
+// Health check (public)
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// All other API routes require auth
+app.use('/api/journal', authMiddleware, journalRoutes);
+app.use('/api/projects', authMiddleware, projectRoutes);
+app.use('/api/pattern', authMiddleware, patternRoutes);
+app.use('/api/ai', authMiddleware, aiRoutes);
+app.use('/api/confidence', authMiddleware, confidenceRoutes);
+app.use('/api/admin', authMiddleware, adminRoutes);
 
 app.listen(PORT, () => {
   console.log(`守明 backend running on http://localhost:${PORT}`);

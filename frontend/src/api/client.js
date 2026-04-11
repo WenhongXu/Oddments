@@ -1,8 +1,15 @@
+import { getToken, clearSession } from './auth.js';
+
 const BASE = '/api';
 
 async function request(path, options = {}) {
+  const token = getToken();
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options.headers,
+    },
     ...options,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
@@ -10,6 +17,11 @@ async function request(path, options = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
+    // Auto-logout on 401
+    if (res.status === 401) {
+      clearSession();
+      window.location.href = '/login';
+    }
     const err = new Error(data.error || `HTTP ${res.status}`);
     err.code = data.code;
     err.status = res.status;

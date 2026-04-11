@@ -21,8 +21,18 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL DEFAULT '守明',
+    username TEXT UNIQUE,
+    pin_hash TEXT,
     config_json TEXT DEFAULT '{}',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS user_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    token TEXT UNIQUE NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
   );
 
   CREATE TABLE IF NOT EXISTS dimensions (
@@ -122,7 +132,7 @@ db.exec(`
   );
 `);
 
-// Seed default user if not exists
+// Seed default user if not exists (no auth required for existing single-user data)
 const userExists = db.prepare('SELECT id FROM users WHERE id = 1').get();
 if (!userExists) {
   db.prepare("INSERT INTO users (id, name) VALUES (1, '守明')").run();

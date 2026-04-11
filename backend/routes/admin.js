@@ -2,22 +2,22 @@ import express from 'express';
 import db from '../db/database.js';
 
 const router = express.Router();
-const USER_ID = 1;
 
 // GET user config
 router.get('/config', (req, res) => {
-  const user = db.prepare('SELECT name, config_json FROM users WHERE id = ?').get(USER_ID);
+  const user = db.prepare('SELECT name, username, config_json FROM users WHERE id = ?').get(req.userId);
   res.json({
     name: user.name,
+    username: user.username,
     config: JSON.parse(user.config_json || '{}'),
   });
 });
 
-// PUT update advisor notes (命理师指导原则)
+// PUT update user config and advisor notes
 router.put('/config', (req, res) => {
   const { advisor_notes, name } = req.body;
 
-  const user = db.prepare('SELECT config_json FROM users WHERE id = ?').get(USER_ID);
+  const user = db.prepare('SELECT config_json FROM users WHERE id = ?').get(req.userId);
   const config = JSON.parse(user.config_json || '{}');
 
   if (advisor_notes !== undefined) config.advisor_notes = advisor_notes;
@@ -25,7 +25,7 @@ router.put('/config', (req, res) => {
   db.prepare('UPDATE users SET config_json = ?, name = ? WHERE id = ?').run(
     JSON.stringify(config),
     name || '守明',
-    USER_ID
+    req.userId
   );
 
   res.json({ success: true });
@@ -35,7 +35,7 @@ router.put('/config', (req, res) => {
 router.get('/questions', (req, res) => {
   const { dimension } = req.query;
   let query = 'SELECT * FROM question_pool WHERE (user_id IS NULL OR user_id = ?)';
-  const params = [USER_ID];
+  const params = [req.userId];
 
   if (dimension) {
     query += ' AND dimension = ?';
@@ -57,7 +57,7 @@ router.post('/questions', (req, res) => {
 
   const result = db.prepare(
     'INSERT INTO question_pool (user_id, dimension, question_text, question_type, config) VALUES (?, ?, ?, ?, ?)'
-  ).run(USER_ID, dimension, question_text, question_type, JSON.stringify(config || {}));
+  ).run(req.userId, dimension, question_text, question_type, JSON.stringify(config || {}));
 
   res.status(201).json({ id: result.lastInsertRowid, success: true });
 });
@@ -71,25 +71,25 @@ router.put('/questions/:id/toggle', (req, res) => {
   res.json({ success: true, is_active: !q.is_active });
 });
 
-// GET dimension scores (for admin review)
+// GET dimension scores
 router.get('/dimensions', (req, res) => {
-  const dims = db.prepare('SELECT * FROM dimensions WHERE user_id = ?').all(USER_ID);
+  const dims = db.prepare('SELECT * FROM dimensions WHERE user_id = ?').all(req.userId);
   res.json(dims);
 });
 
 // GET stats overview
 router.get('/stats', (req, res) => {
-  const journalCount = db.prepare('SELECT COUNT(*) as cnt FROM daily_journals WHERE user_id = ?').get(USER_ID);
-  const projectCount = db.prepare('SELECT COUNT(*) as cnt FROM projects WHERE user_id = ?').get(USER_ID);
-  const confidenceCount = db.prepare('SELECT COUNT(*) as cnt FROM confidence_logs WHERE user_id = ?').get(USER_ID);
+  const userId = req.userId;
+  const journalCount = db.prepare('SELECT COUNT(*) as cnt FROM daily_journals WHERE user_id = ?').get(userId);
+  const projectCount = db.prepare('SELECT COUNT(*) as cnt FROM projects WHERE user_id = ?').get(userId);
+  const confidenceCount = db.prepare('SELECT COUNT(*) as cnt FROM confidence_logs WHERE user_id = ?').get(userId);
   const checkinCount = db.prepare(
     'SELECT COUNT(*) as cnt FROM project_checkins pc JOIN projects p ON pc.project_id = p.id WHERE p.user_id = ?'
-  ).get(USER_ID);
+  ).get(userId);
 
-  // Streak: consecutive days with journal entries
   const journals = db.prepare(
     'SELECT date FROM daily_journals WHERE user_id = ? ORDER BY date DESC'
-  ).all(USER_ID);
+  ).all(userId);
 
   let journalStreak = 0;
   const todayStr = new Date().toISOString().split('T')[0];
